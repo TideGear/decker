@@ -1086,15 +1086,75 @@ Popup.create = function(name,obj,nodiv) {
 Popup.checkAllBounds = function() {
 	Popup.activeList.forEach(data => {
 		let popup = Popup.popupList[data.name];
+		popup.updateScale();
 		popup.checkBounds();
 	});
 }
-window.addEventListener("resize", Popup.checkAllBounds);
+
+// Handle resize events with immediate scaling updates
+window.addEventListener("resize", () => {
+	// Update scaling for all active popups
+	Popup.activeList.forEach(data => {
+		let popup = Popup.popupList[data.name];
+		popup.updateScale();
+	});
+});
+
+Popup.prototype.updateScale = function() {
+	let div = this.wrapper.children[0];
+	if (!div) return;
+	
+	// Cancel any pending scale operations for this popup
+	if (this.scaleTimeout) {
+		clearTimeout(this.scaleTimeout);
+		this.scaleTimeout = null;
+	}
+	
+	// Temporarily remove scaling to get natural dimensions
+	div.style.transform = 'none';
+	
+	// Force layout by accessing offsetHeight
+	div.offsetHeight;
+	
+	// Get dimensions immediately after forcing layout
+	let rect = div.getBoundingClientRect();
+	let popupWidth = rect.width;
+	let popupHeight = rect.height;
+	
+	// If dimensions are still invalid, try again with a timeout
+	if (popupWidth <= 0 || popupHeight <= 0) {
+		this.scaleTimeout = setTimeout(() => {
+			this.scaleTimeout = null;
+			this.updateScale();
+		}, 10);
+		return;
+	}
+	
+	// Calculate scale to fit within 95% of viewport while maintaining aspect ratio
+	let scaleX = (window.innerWidth * 0.95) / popupWidth;
+	let scaleY = (window.innerHeight * 0.95) / popupHeight;
+	let scale = Math.min(scaleX, scaleY); // Allow both scaling up and down
+	
+	// Apply the scale with threshold to avoid tiny changes
+	if (Math.abs(scale - 1) > 0.01) {
+		div.style.transform = `scale(${scale})`;
+		// Reset position when scaling to let flexbox handle centering
+		div.style.left = '0px';
+		div.style.top = '0px';
+	} else {
+		div.style.transform = 'none';
+	}
+}
 
 Popup.prototype.checkBounds = function() {
 	let div = this.wrapper.children[0];
 	let obj = this.wrapper.children[0].children[0];
 	if (!obj) return;
+
+	// Skip bounds checking if the popup is scaled - let flexbox handle centering
+	if (div.style.transform && div.style.transform !== 'none') {
+		return;
+	}
 
 	if (div.offsetLeft+20 > window.innerWidth)
 		div.style.left = parseInt(div.style.left) - (div.offsetLeft+20 - window.innerWidth) + "px";
@@ -1122,6 +1182,11 @@ Popup.prototype.setDrag = function(obj) {
 
 	let dragging = false;
 	obj.onmousedown = e => {
+		// Don't allow dragging if the popup is scaled
+		if (div.style.transform && div.style.transform !== 'none') {
+			return;
+		}
+		
 		dragging = true;
 		window.addEventListener("mousemove", divMove, true);
 		dragX = e.clientX;
@@ -1178,8 +1243,15 @@ Popup._show = function(id, ...p) {
 	let obj = popup.wrapper;
 	document.activeElement.blur();
 	document.getElementById("popups").appendChild(obj);
-	popup.checkBounds();
+	
+	// Initialize the popup first
 	if ( popup.initFunc ) popup.initFunc(...p);
+	
+	// Then scale and position after initialization
+	setTimeout(() => {
+		popup.updateScale();
+		popup.checkBounds();
+	}, 0);
 
 	let active = {name:id,callback:null};
 	Popup.activeList.push(active);
@@ -1192,6 +1264,17 @@ Popup._show = function(id, ...p) {
 Popup.close = function(val) {
 	let popups = document.getElementById("popups");
 	let toClose = popups.lastElementChild;
+	
+	// Clean up any pending scale operations for the closing popup
+	let activeData = Popup.activeList[Popup.activeList.length-1];
+	if (activeData) {
+		let popup = Popup.popupList[activeData.name];
+		if (popup && popup.scaleTimeout) {
+			clearTimeout(popup.scaleTimeout);
+			popup.scaleTimeout = null;
+		}
+	}
+	
 	popups.removeChild(toClose);
 
 	let cb = Popup.activeList[Popup.activeList.length-1].callback;
@@ -1201,6 +1284,15 @@ Popup.close = function(val) {
 }
 
 Popup.closeAll = function() {
+	// Clean up all pending scale operations
+	Popup.activeList.forEach(activeData => {
+		let popup = Popup.popupList[activeData.name];
+		if (popup && popup.scaleTimeout) {
+			clearTimeout(popup.scaleTimeout);
+			popup.scaleTimeout = null;
+		}
+	});
+	
 	let popups = document.getElementById("popups");
 	while (popups.children.length)
 		popups.removeChild(popups.lastElementChild);
